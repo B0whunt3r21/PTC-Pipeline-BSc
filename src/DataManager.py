@@ -7,15 +7,10 @@ ROOT = os.path.dirname(os.path.realpath(__file__))
 
 class DataManager():
     def __init__(self):
-        return None
-
-
-    #Clear
-    def clear(self):
-        self.Dark.drop(labels=self.Dark.index, axis=0, inplace=True)
-        self.linearity.drop(labels=self.linearity.index, axis=0, inplace=True)
-        self.Gain.drop(labels=self.Gain.index, axis=0, inplace=True)
-        #self.Noise.drop(labels=self.Noise.index, axis=0, inplace=True)
+        #Init Dataframe structure
+        self.df = pd.DataFrame(columns=[
+            "files"
+        ])
 
         
     #Stacks the Images inside the Frames
@@ -26,34 +21,36 @@ class DataManager():
        
     def openFit(self, path, fileName):
         with fits.open(path+fileName) as fit:
+            header = fit[0].header
             data = fit[0].data
-        return data
+            exp = header['EXPTIME']
+            temp = header['CCD-TEMP']
+        return pd.Series([data, exp, temp])
 
     
-    #Sorts files' data into corresponding DataFrames
-    def fetchFiles(self, path, name_structure=["type", "Nr"], extension="fit"):
+    def fetchFiles(self, path, extension="fit"):
         path = ROOT + path
-        files = [file for file in os.listdir(path) if file.endswith(extension)]
-        parsed = []
+        files = [f for f in os.listdir(path) if f.endswith(extension)]
 
-        for file in files:
-            parts = file.replace(f".{extension}", "").split("_")
-            
-            entry = {}
-            for i, key in enumerate(name_structure):
-                try:
-                    entry[key] = float(parts[i]) 
-                except ValueError:
-                    entry[key] = parts[i].lower()
-                except IndexError:
-                    entry[key] = None
-            entry["file"] = file
-            entry["data"] = self.openFit(path, file)
-            parsed.append(entry)
-
-        df = pd.DataFrame(parsed)
-        df.sort_values(name_structure, inplace=True)
-        return df
+        self.df['files'] = files
+        self.df['split_names'] = self.df['files'].apply(lambda n: n.replace(f".{extension}", "").split("_"))
+        self.df[['data', 'exp', 'temp']] = self.df['files'].apply(lambda f: self.openFit(path, f))
+        
+        return self.df
+    
+    '''
+    @Params:
+        path.. root path to output folder
+    @return:
+        path.. global path to output folder
+    '''
+    def create_Dir(self, path):
+        path = ROOT + path
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as e:
+            print(f"Error creating folder '{path}': {e}")
+        return path
 
 
 
@@ -102,13 +99,25 @@ class DataManager():
         x_max = center[0]+dx
 
         # Extract the rectangular region
-        slice = image[y_min:y_max, x_min:x_max]
-        y, x = np.ogrid[y_min:y_max, x_min:x_max]
-        area = (x - center[0]) * (y - center[1])
-        mask = area <= 4*dx*dy
+        return image[y_min:y_max, x_min:x_max]
 
-            #Apply the mask
+        '''
+        y, x = np.ogrid[y_min:y_max, x_min:x_max]
+        area = x * y
+        mask = area <= dx*dy
+        
+        
+        h, w = slice.shape 
+        yy, xx = np.ogrid[:h, :w]
+        cy = center[1] - y_min
+        cx = center[0] - x_min
+        mask = ((xx - cx) * (yy - cy)) <= 4 * dx * dy
+        
+
+        #Apply the mask
         masked = np.where(mask, slice, np.nan)
+
         return masked
+        '''
     
 
