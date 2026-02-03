@@ -1,6 +1,5 @@
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle, Rectangle
-from uncertainties import ufloat, nominal_value, unumpy
 import numpy as np
 import pandas as pd
 import os
@@ -121,15 +120,27 @@ def compute_ptc(light_df, master_bias, center, dx, dy):
         roi2 = dm.rectangularSelection(I2, center, dx, dy)
 
         signal = roi1.mean()
+        spatial_noise = roi1.std()
         delta_noise = np.std(roi1 - roi2)/np.sqrt(2)
 
         rows.append({
             "exp": exp,
             "signal": signal,
+            "spatial_noise": spatial_noise,
             "delta_noise": delta_noise
         })
 
     return pd.DataFrame(rows).sort_values("exp")
+
+
+'''
+    @Params:
+        ptc_df.. PTC Data
+    @return
+        fwc.. full well capacity
+'''
+def get_FWC(ptc_df, percent=1):
+    return ptc_df["signal"].iloc[ptc_df['delta_noise'].idxmax()+1] * percent
 
 
 '''
@@ -171,17 +182,29 @@ def fit_gain(ptc_df):
     @return
         prnu.. calculated Pixel response non-unifomrity
 '''
-def compute_prnu(light_df, master_bias, center, dx, dy):
-    rows = []
-    for exp, group in light_df.groupby("exp"):
-        I1 = group["data"].iloc[0] - master_bias
-        roi = dm.rectangularSelection(I1, center, dx, dy)
-        spatial_std = roi.std()
-        signal = roi.mean()
-        rows.append((signal, spatial_std))
+def compute_prnu(ptc_df, fwc):
+    low = 0.1 * fwc
+    high = 0.8 * fwc
+    mask = (ptc_df["signal"] >= low) & (ptc_df["signal"] <= high)
+    df = ptc_df[mask]
+    prnu, _ = np.polyfit(df["signal"], df["spatial_noise"], 1)
 
-    df = pd.DataFrame(rows, columns=["signal", "spatial_std"])
-    prnu, _ = np.polyfit(df["signal"], df["spatial_std"], 1)
+
+    '''fitModel = models.LinearModel()
+
+    idx_max = ptc_df["spatial_noise"].idxmax()
+    x = ptc_df["signal"].iloc[:idx_max+1]
+    y = ptc_df["spatial_noise"].iloc[:idx_max+1]
+    params = fitModel.guess(y, x=x)
+    result = fitModel.fit(y, params, x=x, calc_covar=True)
+    prnu = result.params['slope'] / ptc_df['spatial_noise'].mean()
+    print(prnu)
+    '''
+
+    fig, ax = plt.subplots(1, 1, figsize=(4,4))
+    ax.plot(ptc_df['signal'], ptc_df['spatial_noise'])
+    #ax.plot(x, result.best_fit)
+    ax.plot(df["signal"], prnu*df["signal"]+_)
     return prnu
 
 
@@ -212,16 +235,6 @@ def add_totalNoise(ptc_df):
 '''
     @Params:
         ptc_df.. PTC Data
-    @return
-        fwc.. full well capacity
-'''
-def get_FWC(ptc_df, percent=1):
-    return ptc_df["signal"].iloc[ptc_df['delta_noise'].idxmax()] * percent
-
-
-'''
-    @Params:
-        ptc_df.. PTC Data
         read_noise.. Read-noise extracted from bias frames
         path.. root path to output folder
 '''
@@ -244,24 +257,25 @@ def plot_ptc(ptc_df, read_noise, fwc, path):
 
 
     plt.figure(figsize=(6, 6))
+    plt.loglog(ptc_df["signal"], ptc_df["delta_noise"], color=color_Delta_Noise, marker="s", linestyle=":", label="Temporal noise")
+    
     plt.hlines(read_noise, 0, ptc_df["signal"].min(), color=color_Read_Noise, linestyle='-', label="Read noise")
-
-    plt.loglog(ptc_df["signal"], ptc_df["delta_noise"], color=color_Delta_Noise, marker="s", linestyle="", label="Temporal noise")
-
-    plt.loglog(ptc_df["signal"], ptc_df["fpn"], color=color_FPN, marker="o", linestyle="", label="FPN")
-    plt.loglog(xFPN, fpn_result.best_fit, color=color_FPN, linestyle='--', label='FPN best fit')
-
+    
     plt.loglog(ptc_df["signal"], ptc_df["shot_noise"], color=color_Shot_Noise, marker="D", linestyle="", label="Shot noise")
     plt.loglog(xShot, np.sqrt(shot_result.best_fit), color=color_Shot_Noise, linestyle='--', label='shot noise best fit')
-
-
-    plt.loglog(ptc_df["signal"], ptc_df["total_noise"], color=color_Total_Noise, marker="x", linestyle="", label="Total noise")
-
+    
+    plt.loglog(ptc_df["signal"], ptc_df["fpn"], color=color_FPN, marker="o", linestyle="", label="FPN")
+    plt.loglog(xFPN, fpn_result.best_fit, color=color_FPN, linestyle='--', label='FPN best fit')
+    
+    plt.loglog(ptc_df["signal"], ptc_df["total_noise"], color=color_Total_Noise, marker="x", linestyle=":", label="Total noise")
+    
     plt.vlines(fwc, 0, ptc_df["total_noise"].max(), color=color_FWC, linestyle='--', label="FWC")
 
+    plt.xlim(1, 4e4)
+    plt.ylim(1, 9e3)
     plt.xlabel("Signal (DN)")
     plt.ylabel("Noise (DN)")
-    plt.legend()
+    plt.legend(loc='upper left')
     plt.grid(True)
     plt.minorticks_on()
     plt.title("PTC")
@@ -274,7 +288,7 @@ def plot_ptc(ptc_df, read_noise, fwc, path):
         ptc_df.. PTC Data
         path.. root path to output folder
 '''
-def plot_nonLinearity(ptc_df, path, maxfwc, reducedfwc):
+def plot_nonLinearity(ptc_df, path, fwc):
     fitModel = models.LinearModel()
 
     idx_max = ptc_df["signal"].idxmax()
@@ -288,14 +302,12 @@ def plot_nonLinearity(ptc_df, path, maxfwc, reducedfwc):
 
     nonLin = np.abs(ptc_df["signal"].iloc[:idx_max+1] - yAx)/yAx.max() * 100
     
-    fig, axes = plt.subplots(2, 1, figsize=(6, 5))
-    fig.tight_layout()
+    fig, axes = plt.subplots(2, 1, figsize=(8, 7))
     fig.suptitle("Nonlinearity")
 
     axes[0].plot(ptc_df["exp"], ptc_df["signal"], "bx--", label="Signals")
     axes[0].plot(xAx, yAx, color=color_Fit, linestyle='--', label='best fit')
-    axes[0].hlines(maxfwc, ptc_df['exp'].iloc[0], ptc_df['exp'].iloc[-1], color=color_FWC, linestyle="--", label="max. FWC")
-    axes[0].hlines(reducedfwc, ptc_df['exp'].iloc[0], ptc_df['exp'].iloc[-1], color=color_FWC, linestyle=":", label="reduced FWC")
+    axes[0].hlines(fwc, ptc_df['exp'].iloc[0], ptc_df['exp'].iloc[-1], color=color_FWC, linestyle="--", label="FWC")
     axes[0].set_xlabel("Exposure (s)")
     axes[0].set_ylabel("Signal (DN)")
     axes[0].legend()
@@ -308,11 +320,10 @@ def plot_nonLinearity(ptc_df, path, maxfwc, reducedfwc):
     params = fitModel.guess(nonLin, x=xAx)
     result = fitModel.fit(nonLin, params, x=xAx, calc_covar=True)
 
-    axes[1].plot(xAx, nonLin, 'bx', label="Nonlinearity")
+    axes[1].plot(xAx, nonLin, 'bx')
     axes[1].plot(xAx, result.best_fit, color=color_Fit, linestyle='--')
     axes[1].set_xlabel("Exposure (s)")
     axes[1].set_ylabel("Non-linearity (%)")
-    axes[1].legend()
     axes[1].grid(True)
     axes[1].minorticks_on()
 
@@ -424,12 +435,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
 
-    color_Read_Noise = "#00FF00"
-    color_Delta_Noise = "#696969"
-    color_Total_Noise = "#FF0000"
-    color_FPN = "#FFC500"
-    color_Shot_Noise = "#0AFFE0"
-    color_FWC = "#000000"
+    color_Read_Noise = "#000000"
+    color_Delta_Noise = "#0072B2"
+    color_Total_Noise = "#D55E00"
+    color_FPN = "#009E73"
+    color_Shot_Noise = "#E69F00"
+    color_FWC = "#999999"
     color_DR = "#FFFFFF"
     color_Fit = "#CC00CC"
 
@@ -463,22 +474,24 @@ if __name__ == '__main__':
         ptc_df = compute_ptc(light_df, master_bias, center, dx, dy)
         ptc_df = add_shot_noise(ptc_df, read_noise)
 
-        gain = fit_gain(ptc_df)
-        prnu = compute_prnu(light_df, master_bias, center, dx, dy)
+        fwc = get_FWC(ptc_df)
 
+        gain = fit_gain(ptc_df)
+
+        prnu = compute_prnu(ptc_df, fwc)
         ptc_df = add_fpn(ptc_df, prnu)
+
         ptc_df = add_totalNoise(ptc_df)
 
-        maxfwc = get_FWC(ptc_df)
-        reducedfwc = get_FWC(ptc_df, 0.75)
-        plot_ptc(ptc_df, read_noise, maxfwc, path=outPath)
+        
+        plot_ptc(ptc_df, read_noise, fwc, path=outPath)
 
 
-        dr = reducedfwc/read_noise
+        dr = fwc/read_noise
         dr_db = 20 * np.log10(dr)
 
 
-        plot_nonLinearity(ptc_df, path=outPath, maxfwc=maxfwc, reducedfwc=reducedfwc)
+        plot_nonLinearity(ptc_df, outPath, fwc)
 
         dark_df = compute_dark_current(dark_df, master_bias, gain, center, dx, dy)
         plot_dark_current(dark_df, path=outPath)
@@ -489,16 +502,15 @@ if __name__ == '__main__':
         table.add_column("Gain", style=color_Shot_Noise, justify="center")
         table.add_column("read noise", style=color_Read_Noise, justify="center")
         table.add_column("PRNU", style=color_FPN, justify="center")
-        table.add_column("max FWC", style=color_FWC, justify="center")
-        table.add_column("reduced FWC", style=color_FWC, justify="center")
+        table.add_column("FWC", style=color_FWC, justify="center")
         table.add_column("DR", style=color_DR, justify="center")
         table.add_column("DR (DB)", style=color_DR, justify="center")
-        table.add_row(str(round(gain, 4)), str(round(read_noise, 4)), str(round(prnu, 4)), str(round(maxfwc, 4)), str(round(reducedfwc, 4)), str(round(dr, 4)), str(round(dr_db, 4)))
+        table.add_row(str(round(gain, 4)), str(round(read_noise, 4)), str(round(prnu, 4)), str(round(fwc, 4)), str(round(dr, 4)), str(round(dr_db, 4)))
         console.print(table)
 
 
         makeHist(light_df.iloc[-1])
 
 
-        plt.show()
+        #plt.show()
 

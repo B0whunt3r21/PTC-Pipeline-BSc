@@ -209,6 +209,6 @@ __marimo__/
 
 #Project intern
 docs/
-src/data/
+src/data/*
 src/img/
 

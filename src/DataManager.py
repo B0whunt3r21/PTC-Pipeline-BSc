@@ -30,14 +30,14 @@ class DataManager():
     
     def fetchFiles(self, path, extension="fit"):
         path = ROOT + path
-        files = [f for f in os.listdir(path) if f.endswith(extension)]
-
+        files = [f for f in os.listdir(path)] # if f.endswith(extension)] TODO Multi format readin
         self.df['files'] = files
         self.df['split_names'] = self.df['files'].apply(lambda n: n.replace(f".{extension}", "").split("_"))
         self.df[['data', 'exp', 'temp']] = self.df['files'].apply(lambda f: self.openFit(path, f))
         
         return self.df
     
+
     '''
     @Params:
         path.. project root path to output folder
@@ -53,7 +53,6 @@ class DataManager():
         return path
 
 
-
     '''
     @Params
         path.. project root path to input storage
@@ -64,6 +63,7 @@ class DataManager():
         path = ROOT + path
         folders = [item for item in os.listdir(path) if os.path.isdir(os.path.join(path, item))]
         return folders
+
 
     '''
     @Param:
