@@ -365,7 +365,7 @@ def compute_dark_current(dark_df, master_bias, gain, center, dx, dy):
 
         mean_dn = stacked.mean()
         mean_e = mean_dn * gain
-        dark_current = mean_e / 60  #60s fixed exposure
+        dark_current = mean_e / group["exp"].mean()
 
         rows.append({
             "temp": temp,
